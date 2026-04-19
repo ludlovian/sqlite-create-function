@@ -1,0 +1,26 @@
+--- 1. Load extension ---
+--- 2. Define mul2 ---
+[TRACE] create_function: Connection created
+[TRACE] create_function: 'mul2' with 1 params
+OK
+10|10
+--- 3. Multiple args ---
+[TRACE] create_function: 'power_sum' with 2 params
+OK
+25|25
+--- 4. Error - redefine ---
+Error near line 15: not an error
+--- 5. Cleanup ---
+[TRACE] create_function_clear
+[TRACE] clear_connection
+[TRACE] clear_function: 'power_sum'
+[TRACE] clear_function: 'mul2'
+OK
+--- 6. Error ---
+Error near line 21: Function has been cleared
+--- 7. Second cleanup ---
+[TRACE] create_function_clear
+OK
+[TRACE] destroy_connection
+[TRACE] destroy_function: ''
+[TRACE] destroy_function: ''
