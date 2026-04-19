@@ -19,11 +19,22 @@ SELECT power_sum(3, 4); -- returns 25
 
 You cannot redefine a UDF once created using this extension.
 
+## create\_function (name)
+
+This version will return the current definition, or `NULL` if not defined.
+
+```sql
+SELECT ifnull(create_function('whizzo'), create_function(whizzo, '...'));
+```
+
 ## create\_function\_clear()
 
 SELECT this to close all the cached prepared statements.
 
-Don't do anything much after this. Previously defined functions will now error.
+Any previously defined statements will now error gently if called. And the
+definition frmo `create_function(fn)` will return`'cleared'`.
+
+Curiously, you can actually now define NEW fucntions. But why would you?
 
 ## void create\_function\_clear (sqlite3*)
 

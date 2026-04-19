@@ -28,8 +28,8 @@ typedef struct Connection Connection;
  */
 
 struct Function {
-    char *name;
-    int nArg;
+    char *zName;
+    char *zSql;
     sqlite3_stmt *stmt;
     Connection *conn;
     Function *next;
@@ -49,51 +49,40 @@ struct Connection {
  *  Destructors
  *
  *  The destroy_XXXX destructors are called automatically. They clear
- *  everything.
+ *  ths strings & structs, and hence the lists.
  *
  *  The clear_XXX destructor are also called by cleanup routine. They
- *  close any outstanding statments and unlink the lists, but leave
- *  the structs in place.
+ *  close any outstanding statments but leave the lists, structs and
+ *  strings in place
  *
- *  So, if we cleanup by the explicit cleanup routine, all that the
- *  formal destructors have to do is clear the main struct.
+ *  This leaves the function structs in place after clearing, but with
+ *  no active stmt.
  *
  */
 
-static Function* find_function (Connection *conn, const char *name, int nArg) {
+static Function* find_function(Connection *conn, const char *z) {
     Function *func;
     for( func = conn->first_function; func; func = func->next ) {
-        if( strcmp(name, func->name) == 0 && func->nArg == nArg ) return func;
+        if( strcmp(z, func->zName) == 0 ) return func;
     }
     return NULL;
 }
 
 static void clear_function(Function *p) {
-    Function **pp;
-    if( p && p->conn ) {
-        TRACE("clear_function: '%s'", p->name);
-        if( p->stmt ) sqlite3_finalize(p->stmt);
-
-        sqlite3_free(p->name);
-
-        /* Disconnect from parent's list */
-        for( pp = &p->conn->first_function; *pp; pp = &((*pp)->next) ) {
-            if (*pp == p) {
-                *pp = p->next;
-                break;
-            }
-        }
-        p->name = NULL;
+    if( p && p->stmt ) {
+        TRACE("clear_function: '%s'", p->zName);
+        sqlite3_finalize(p->stmt);
         p->stmt = NULL;
-        p->conn = NULL;
     }
 }
 
 static void destroy_function(void *pAux) {
     Function *p = (Function *)pAux;
     if( p ) {
-        TRACE("destroy_function: '%s'", p->name ? p->name : "");
+        TRACE("destroy_function: '%s'", p->zName ? p->zName : "");
         clear_function(p);
+        sqlite3_free(p->zName);
+        sqlite3_free(p->zSql);
         free(p);
     }
 }
@@ -115,6 +104,20 @@ static void destroy_connection(void *pAux) {
         clear_connection(p);
         free(p);
     }
+}
+
+static Connection* get_connection(sqlite3 *db) {
+    Connection *conn;
+    conn = (Connection *)sqlite3_get_clientdata(db, "create_function");
+    if( conn ) return conn;
+
+    conn = calloc(1, sizeof(Connection));
+    if( !conn ) return NULL;
+
+    conn->db = db;
+    sqlite3_set_clientdata(db, "create_function", conn, destroy_connection);
+    TRACE("get_connection: Connection created");
+    return conn;
 }
 
 /************************************************************************
@@ -179,71 +182,79 @@ static void create_function_clear_call(sqlite3_context *ctx, int argc, sqlite3_v
 
 static void create_function_call(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     sqlite3 *db;
-    const char *zName, *zSqlBody;
-    char *zFuncSql = NULL;
+    const char *zName, *zSqlBody = NULL;
+    char *zSql = NULL;
     Connection *conn;
     Function *func = NULL;
     sqlite3_stmt *stmt = NULL;
-    int nArg;
     int rc;
 
     db = sqlite3_context_db_handle(ctx);
     zName = (const char *)sqlite3_value_text(argv[0]);
-    zSqlBody = (const char *)sqlite3_value_text(argv[1]);
+    if( argc == 2 ) zSqlBody = (const char *)sqlite3_value_text(argv[1]);
 
-    if (!zName || !zSqlBody) {
+    if( !zName || (argc == 2 && !zSqlBody) ) {
         sqlite3_result_error(ctx, "Invalid arguments", -1);
         return;
     }
 
-    conn = (Connection *)sqlite3_get_clientdata(db, "create_function");
-    if( !conn ) {
-        conn = calloc(1, sizeof(Connection));
-        if( !conn ) goto nomem;
-        conn->db = db;
-        sqlite3_set_clientdata(db, "create_function", conn, destroy_connection);
-        TRACE("create_function: Connection created");
+    conn = get_connection(db);
+    if( !conn ) goto nomem;
+
+    func = find_function(conn, zName);
+
+    if( argc == 1 ) {
+        if( func ) {
+            if (func->stmt) {
+                sqlite3_result_text(ctx, func->zSql+7, -1, SQLITE_TRANSIENT);
+            } else {
+                sqlite3_result_text(ctx, "cleared", -1, SQLITE_STATIC);
+            }
+        } else {
+            sqlite3_result_null(ctx);
+        }
+        return;
     }
 
-    zFuncSql = sqlite3_mprintf("SELECT %s", zSqlBody);
-    if( sqlite3_prepare_v2(db, zFuncSql, -1, &stmt, NULL) != SQLITE_OK ) {
-        sqlite3_free(zFuncSql);
+    if( func ) {
+        sqlite3_result_error(ctx, "Cannot redefine a function", -1);
+        return;
+    }
+
+
+    zSql = sqlite3_mprintf("SELECT %s", zSqlBody);
+    if( !zSql ) goto nomem;
+
+    if( sqlite3_prepare_v2(db, zSql, -1, &stmt, NULL) != SQLITE_OK ) {
+        sqlite3_free(zSql);
         goto errexit;
     }
-    sqlite3_free(zFuncSql);
 
     if( !sqlite3_stmt_readonly(stmt) || sqlite3_column_count(stmt) != 1 ) {
         sqlite3_result_error(ctx, "Invalid function definition", -1);
+        sqlite3_free(zSql);
         sqlite3_finalize(stmt);
-        goto errexit;
-    }
-    nArg = sqlite3_bind_parameter_count(stmt);
-
-    /* if this is already registered, then we error out. You cannot redefine
-     * a function whilst processing a statement (ie now) */
-    if( find_function(conn, zName, nArg) ) {
-        sqlite3_result_error(ctx, "Cannot redefine a function", -1);
-        sqlite3_finalize(stmt);
-        goto errexit;
+        return;
     }
 
     func = calloc(1, sizeof(Function));
     if( !func ) {
+        sqlite3_free(zSql);
         sqlite3_finalize(stmt);
         goto nomem;
     }
 
-    func->name = sqlite3_mprintf("%s", zName);
-    func->nArg = nArg;
+    func->zName = sqlite3_mprintf("%s", zName);
+    func->zSql = zSql;
     func->stmt = stmt;
     func->conn = conn;
     func->next = conn->first_function;
     conn->first_function = func;
 
-    TRACE("create_function: '%s' with %d params", zName, nArg);
+    TRACE("create_function: '%s'", zName);
 
-    rc = sqlite3_create_function_v2(db, func->name, func->nArg,
-            SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+    rc = sqlite3_create_function_v2(db, func->zName,
+            sqlite3_bind_parameter_count(stmt), SQLITE_UTF8 | SQLITE_DETERMINISTIC,
             func, function_call, NULL, NULL, destroy_function);
 
     /* If create function failed the destructor will have been called */
@@ -269,6 +280,7 @@ nomem:
 
 int sqlite3_createfunction_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi) {
     SQLITE_EXTENSION_INIT2(pApi);
+    sqlite3_create_function(db, "create_function", 1, SQLITE_UTF8, NULL, create_function_call, NULL, NULL);
     sqlite3_create_function(db, "create_function", 2, SQLITE_UTF8, NULL, create_function_call, NULL, NULL);
     sqlite3_create_function(db, "create_function_clear", 0, SQLITE_UTF8, NULL, create_function_clear_call, NULL, NULL);
     return SQLITE_OK;

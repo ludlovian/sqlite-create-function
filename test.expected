@@ -1,26 +1,45 @@
---- 1. Load extension ---
---- 2. Define mul2 ---
-[TRACE] create_function: Connection created
-[TRACE] create_function: 'mul2' with 1 params
-OK
-10|10
---- 3. Multiple args ---
-[TRACE] create_function: 'power_sum' with 2 params
-OK
-25|25
---- 4. Error - redefine ---
-Error near line 15: not an error
---- 5. Cleanup ---
+10|Load extension
+20|Create new function
+[TRACE] get_connection: Connection created
+21|does not exist
+[TRACE] create_function: 'mul2'
+22|OK
+23|?1 * 2
+24|10
+30|Multiple args
+[TRACE] create_function: 'power_sum'
+31|OK
+32|(?1 * ?1) + (?2 * ?2)
+33|25
+34|100
+40|Redefine
+Error near line 19: Cannot redefine a function
+42|?1 * 2
+50|Clear
 [TRACE] create_function_clear
 [TRACE] clear_connection
 [TRACE] clear_function: 'power_sum'
 [TRACE] clear_function: 'mul2'
-OK
---- 6. Error ---
-Error near line 21: Function has been cleared
---- 7. Second cleanup ---
+51|OK
+60|Inpsect after clear
+61|cleared
+70|Redefine after clear
+Error near line 29: Cannot redefine a function
+80|Second clear
 [TRACE] create_function_clear
-OK
+[TRACE] clear_connection
+81|OK
+90|new func
+[TRACE] create_function: 'triple'
+91|OK
+92|9
+100|final clear
+[TRACE] create_function_clear
+[TRACE] clear_connection
+[TRACE] clear_function: 'triple'
+101|OK
 [TRACE] destroy_connection
-[TRACE] destroy_function: ''
-[TRACE] destroy_function: ''
+[TRACE] clear_connection
+[TRACE] destroy_function: 'mul2'
+[TRACE] destroy_function: 'power_sum'
+[TRACE] destroy_function: 'triple'
