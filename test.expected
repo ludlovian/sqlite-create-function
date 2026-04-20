@@ -4,17 +4,17 @@
 21|does not exist
 [TRACE] create_function: 'mul2'
 22|OK
-23|?1 * 2
+23|select ?1 * 2
 24|10
 30|Multiple args
 [TRACE] create_function: 'power_sum'
 31|OK
-32|(?1 * ?1) + (?2 * ?2)
+32|select (?1 * ?1) + (?2 * ?2)
 33|25
 34|100
 40|Redefine
 Error near line 19: Cannot redefine a function
-42|?1 * 2
+42|select ?1 * 2
 50|Clear
 [TRACE] create_function_clear
 [TRACE] clear_connection

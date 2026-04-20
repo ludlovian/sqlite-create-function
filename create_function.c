@@ -182,8 +182,7 @@ static void create_function_clear_call(sqlite3_context *ctx, int argc, sqlite3_v
 
 static void create_function_call(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     sqlite3 *db;
-    const char *zName, *zSqlBody = NULL;
-    char *zSql = NULL;
+    const char *zName, *zSql = NULL;
     Connection *conn;
     Function *func = NULL;
     sqlite3_stmt *stmt = NULL;
@@ -191,9 +190,9 @@ static void create_function_call(sqlite3_context *ctx, int argc, sqlite3_value *
 
     db = sqlite3_context_db_handle(ctx);
     zName = (const char *)sqlite3_value_text(argv[0]);
-    if( argc == 2 ) zSqlBody = (const char *)sqlite3_value_text(argv[1]);
+    if( argc == 2 ) zSql = (const char *)sqlite3_value_text(argv[1]);
 
-    if( !zName || (argc == 2 && !zSqlBody) ) {
+    if( !zName || (argc == 2 && !zSql) ) {
         sqlite3_result_error(ctx, "Invalid arguments", -1);
         return;
     }
@@ -206,7 +205,7 @@ static void create_function_call(sqlite3_context *ctx, int argc, sqlite3_value *
     if( argc == 1 ) {
         if( func ) {
             if (func->stmt) {
-                sqlite3_result_text(ctx, func->zSql+7, -1, SQLITE_TRANSIENT);
+                sqlite3_result_text(ctx, func->zSql, -1, SQLITE_TRANSIENT);
             } else {
                 sqlite3_result_text(ctx, "cleared", -1, SQLITE_STATIC);
             }
@@ -222,30 +221,24 @@ static void create_function_call(sqlite3_context *ctx, int argc, sqlite3_value *
     }
 
 
-    zSql = sqlite3_mprintf("SELECT %s", zSqlBody);
-    if( !zSql ) goto nomem;
-
     if( sqlite3_prepare_v2(db, zSql, -1, &stmt, NULL) != SQLITE_OK ) {
-        sqlite3_free(zSql);
         goto errexit;
     }
 
     if( !sqlite3_stmt_readonly(stmt) || sqlite3_column_count(stmt) != 1 ) {
         sqlite3_result_error(ctx, "Invalid function definition", -1);
-        sqlite3_free(zSql);
         sqlite3_finalize(stmt);
         return;
     }
 
     func = calloc(1, sizeof(Function));
     if( !func ) {
-        sqlite3_free(zSql);
         sqlite3_finalize(stmt);
         goto nomem;
     }
 
     func->zName = sqlite3_mprintf("%s", zName);
-    func->zSql = zSql;
+    func->zSql = sqlite3_mprintf("%s", zSql);
     func->stmt = stmt;
     func->conn = conn;
     func->next = conn->first_function;
