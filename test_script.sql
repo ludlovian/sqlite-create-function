@@ -24,9 +24,11 @@ SELECT 51, create_function_clear();
 
 SELECT 60, 'Inpsect after clear';
 SELECT 61, create_function('mul2');
+SELECT 62, 'Redefine after clear';
+SELECT 63, create_function('mul2', 'select ?1 + ?1');
 
-SELECT 70, 'Redefine after clear';
-SELECT 71, create_function('mul2', 'select ?1 + ?1');
+SELECT 70, 'Non readonly';
+SELECT 71, create_function('evil','create table temp.t1(x)');
 
 SELECT 80, 'Second clear';
 SELECT 81, create_function_clear();

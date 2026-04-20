@@ -23,8 +23,10 @@ Error near line 19: Cannot redefine a function
 51|OK
 60|Inpsect after clear
 61|cleared
-70|Redefine after clear
-Error near line 29: Cannot redefine a function
+62|Redefine after clear
+Error near line 28: Cannot redefine a function
+70|Non readonly
+Error near line 31: Invalid function definition
 80|Second clear
 [TRACE] create_function_clear
 [TRACE] clear_connection
