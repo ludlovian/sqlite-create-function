@@ -36,16 +36,20 @@ the second parameter.
 This will turn on statement caching. This means that statements will not be
 finalized at the end of the outer SQL call, but kept open to avoid re-preparing.
 
-Having statements open has implications. In particular:
-
-- you cannot redefine or remove UDFs whilst they are open
-- calling `sqlite3_close` will likely fail
+Having statements open has implications. In particular calling `sqlite3_close`
+will likely fail. And UDFs (not jsut these) cannot be removed or changed
+whilst statements remain open.
 
 Many bindings use `sqlite3_close_v2` which _may well_ work (untested). But it
 is good practice to clear the cache before quitting.
 
 Caching is turned off initially, unless the extension is compiled with
-`STATEMENT_CACHE` defined, in which case it defaults to on.
+`CACHE_STATEMENTS` defined, in which case it defaults to on.
+
+The return value is a string decribing how many statements are currently
+cached - which will be zero if you have only just turned caching on, but
+also allows youl to see the size of the cache.
+
 
 #### clear
 
@@ -53,10 +57,14 @@ This clears any cached statements and turns caching off.
 
 If you have turned caching on, then call this before quitting.
 
+The return value is a string describing how many cached statements were
+cleared.
+
 ### void create\_function\_clear (sqlite3\*)
 
 This C function carries out the same as the "clear" command. It allows custom
-bindings to undo any caching.
+bindings to undo any caching by calling it just before closing the connection.
+
 
 ## Limitations
 
