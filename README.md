@@ -1,15 +1,14 @@
 # sqlite-create-function
-An SQLite UDF to create other UDFs via SQL
+An SQLite UDF to create other UDFs via SQL.
 
-It caches the prepared statement for speed. But that means that these have to
-be cleared - either via SQL or a C function call - before closing.
+Everything is done via one UDF call `create_function`.
 
-If you use `sqlite3_close_v2` you _should_ be okay without doing this - but
-it is good practice to clean up your own debris.
+## Basic usage
 
-## create\_function (name, definition)
+### create\_function (name, definition)
 
-SELECT this to create a new UDF.
+This will create a new user-defined function with the parameterised SQL as its
+definition.
 
 ```sql
 SELECT create_function('power_sum', '(?1 * ?1) + (?2 * ?2)'); -- returns OK
@@ -17,25 +16,56 @@ SELECT create_function('power_sum', '(?1 * ?1) + (?2 * ?2)'); -- returns OK
 SELECT power_sum(3, 4); -- returns 25
 ```
 
-You cannot redefine a UDF once created using this extension.
+It is best to only use numbered bind parameters, rather than named ones.
 
-## create\_function (name)
+### create\_function (name)
 
-This version will return the current definition, or `NULL` if not defined.
+This will return the definition of the function, or `NULL` if it is not defined.
 
-```sql
-SELECT ifnull(create_function('whizzo'), create_function(whizzo, '...'));
-```
 
-## create\_function\_clear()
+## Advanced usage
 
-SELECT this to close all the cached prepared statements.
+### create\_function (NULL, command)
 
-Any previously defined statements will now error gently if called. And the
-definition frmo `create_function(fn)` will return`'cleared'`.
+The configuration can be adjusted by sending a command. This is done by
+setting the first parameter to `create_function` and sending the command as
+the second parameter.
 
-Curiously, you can actually now define NEW fucntions. But why would you?
+#### cache
 
-## void create\_function\_clear (sqlite3*)
+This will turn on statement caching. This means that statements will not be
+finalized at the end of the outer SQL call, but kept open to avoid re-preparing.
 
-The C version of the cleanup function
+Having statements open has implications. In particular:
+
+- you cannot redefine or remove UDFs whilst they are open
+- calling `sqlite3_close` will likely fail
+
+Many bindings use `sqlite3_close_v2` which _may well_ work (untested). But it
+is good practice to clear the cache before quitting.
+
+Caching is turned off initially, unless the extension is compiled with
+`STATEMENT_CACHE` defined, in which case it defaults to on.
+
+#### clear
+
+This clears any cached statements and turns caching off.
+
+If you have turned caching on, then call this before quitting.
+
+### void create\_function\_clear (sqlite3\*)
+
+This C function carries out the same as the "clear" command. It allows custom
+bindings to undo any caching.
+
+## Limitations
+
+You cannot undefine or modify UDFs once created with this. They will be
+destroyed when you close the connection.
+
+**Care**: UDFs created here are tagged as INNOCUOUS and DETERMINISTIC.
+So make sure they are, or be prepared to take your own risks.
+
+No thread safety. Everything is stored per connection, so one thread per
+connection will be fine. If you want multiple threads to share a connection,
+then you will have headaches - and not just from this library.
