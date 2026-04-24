@@ -60,10 +60,11 @@ If you have turned caching on, then call this before quitting.
 The return value is a string describing how many cached statements were
 cleared.
 
-### void create\_function\_clear (sqlite3\*)
+### void createfunction\_enable\_cache (sqlite3\*, int bOnOff)
 
-This C function carries out the same as the "clear" command. It allows custom
-bindings to undo any caching by calling it just before closing the connection.
+This C function carries out the same as the "clear" and "cache" commands,
+depending on the `bOnOff` value. It allows custom bindings to set caching
+at the start and and later undo it just before closing the connection.
 
 
 ## Limitations

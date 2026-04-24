@@ -317,15 +317,19 @@ static void connection_clear(Connection *conn) {
  *
  */
 
-void create_function_clear(sqlite3 *db) {
+void createfunction_enable_cache(sqlite3 *db, int bOnOff) {
     Connection* conn;
 
     ASSERT(db);
-    conn = (Connection *)sqlite3_get_clientdata(db, "create_function");
+    conn = connection_get(db);
+    if( !conn ) return;
 
-    if( conn ) {
-        TRACE("create_function_clear");
+    TRACE("createfunction_enable_cache(%d)", bOnOff);
+    if( bOnOff ) {
+        conn->bCache = 1;
+    } else {
         connection_clear(conn);
+        conn->bCache = 0;
     }
 }
 
