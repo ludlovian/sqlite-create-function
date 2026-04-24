@@ -33,22 +33,26 @@ SQLITE_EXTENSION_INIT1
  *
  *  Data structurues
  *
+ *
+ *  The core structure is a Connection. One is created for each connection
+ *  and this is stored as clientdata. The destructor is automatically
+ *  called when the connection is closed.
+ *
+ *  It contains a linked list of Function structs - one for each UDF we
+ *  have created. Each function is registered with this as the userdata.
+ *
+ *  Similarly, a pointer to the relevant Function is stored as auxdata
+ *  on the relevant execution context. It is stored using a negative
+ *  number - an undocumented implementation feature, although used within
+ *  the core library - which will keep it alive until the execution
+ *  concludes. The destructor to this will "release" the prepared statement
+ *  back - either to the cache or to be finalized.
+ *
  */
 
-typedef struct Function Function;
 typedef struct Connection Connection;
+typedef struct Function Function;
 typedef struct CallContext CallContext;
-
-/*
- *  One of these is held for each databse connection. It is attached to the
- *  connection as clientdata and destroyed automatically when the
- *  connection is closed
- *
- *      connection_get          retrieves and/or creates one
- *      connection_destroy      destructor called by SQLite
- *
- *      connection_clear        removes all cached statements
- */
 
 struct Connection {
     sqlite3 *db;
@@ -57,26 +61,6 @@ struct Connection {
     int nFunc;
     Function *first;
 };
-
-static Connection *connection_get(sqlite3 *);
-static void connection_destroy(void *);
-static void connection_clear(Connection *);
-
-/*
- *  One of these is held for each UDF we know about. It is attached to the
- *  function as user_data and destroyed automatically as the function is
- *  removed
- *
- *      function_create         constructor, adds to linked list
- *      function_find           finds the function in the list
- *      function_destroy        destructor call by SQLite - removes from list
- *
- *      fucntion_acquire        gets the prepared statement for use by the VM
- *      function_release        releases the statment once the VM has finished
- *      function_clear          ensures the statement is uncached
- *
- *      function_register       registers the UDF with SQLite
- */
 
 struct Function {
     char *zName;
@@ -88,37 +72,10 @@ struct Function {
     Function *next;
 };
 
-static Function *function_create(Connection *);
-static void function_destroy(void *);
-static Function *function_find(Connection *,const char *);
-
-static sqlite3_stmt *function_acquire(sqlite3_context *,Function *);
-static void function_release(Function *);
-
-static void function_clear(Function *);
-static int function_register(sqlite3_context *, Function *);
-
-/*
- *  One of these is held during the top level VM involving this function.
- *  It is created on demand, and stored as auxdata on the context with a
- *  negative slot. This is an undocumnet implementation feature, but used
- *  within SQLite - for example in the JSON functions - so I am in good
- *  company. The destructor is called automatically when the VM finishes.
- *
- *      context_get             retrieves or creates the context
- *      context_destroy         destructor called by SQLite
- */
-
 /* -(16777216*'c' + 65536*'f' + 256*'u' + 'n') */
 #define CFUN_SLOT -1667659118
 
-struct CallContext {
-    Function *func;
-    sqlite3_stmt* stmt;
-};
 
-static CallContext *context_get(sqlite3_context *,Function *);
-static void context_destroy(void *);
 
 /************************************************************************
  *
@@ -127,76 +84,6 @@ static void context_destroy(void *);
  */
 static void run_function(sqlite3_context *, int, sqlite3_value **);
 
-
-/************************************************************************
- *
- *  Connection
- *
- */
-
-static Connection *connection_get(sqlite3 *db) {
-    Connection* conn;
-
-    conn = (Connection *)sqlite3_get_clientdata(db, "create_function");
-    if( conn ) return conn;
-
-    TRACE("connection_get: create");
-
-    conn = sqlite3_malloc(sizeof(Connection));
-    if( !conn ) return NULL;
-    memset(conn, 0, sizeof(Connection));
-    conn->db = db;
-#ifdef CACHE_STATEMENTS
-    conn->bCache = 1;
-#else
-    conn->bCache = 0;
-#endif
-
-    sqlite3_set_clientdata(db, "create_function", conn, connection_destroy);
-
-    return conn;
-}
-
-static void connection_destroy(void *data) {
-    Connection *conn = (Connection *)data;
-
-    ASSERT(conn);
-    TRACE("connection_destroy");
-
-    connection_clear(conn);
-    sqlite3_free(conn);
-}
-
-static void connection_clear(Connection *conn) {
-    Function *p;
-
-    ASSERT(conn);
-
-    if( conn->nStmt ) {
-        TRACE("connection_clear");
-        for( p = conn->first; p; p = p->next ) {
-            function_clear(p);
-        }
-    }
-}
-
-/************************************************************************
- *
- *  external version of connection_clear
- *
- */
-
-void create_function_clear(sqlite3 *db) {
-    Connection* conn;
-
-    ASSERT(db);
-    conn = (Connection *)sqlite3_get_clientdata(db, "create_function");
-
-    if( conn ) {
-        TRACE("create_function_clear");
-        connection_clear(conn);
-    }
-}
 
 /************************************************************************
  *
@@ -222,19 +109,23 @@ static Function *function_create(Connection *conn){
     return p;
 }
 
-static void function_destroy(void *data) {
-    Function *func = (Function *)data;
+static void function_clear(Function *func) {
+    ASSERT(func);
+
+    if( func->stmt ) {
+        TRACE("function_clear(%s): finalize", func->zName);
+        sqlite3_finalize(func->stmt);
+        func->stmt = NULL;
+        func->conn->nStmt--;
+    }
+}
+
+static void function_destroy(Function *func) {
+    ASSERT(func);
 
     TRACE("function_destroy(%s)", func->zName);
 
-    Function **pp;
     function_clear(func);
-    for( pp = &func->conn->first; *pp; pp = &((*pp)->next) ) {
-        if( *pp == func ) {
-            *pp = func->next;
-            break;
-        }
-    }
     sqlite3_free(func->zName);
     sqlite3_free(func->zSql);
     sqlite3_free(func);
@@ -250,11 +141,11 @@ static Function *function_find(Connection *conn, const char *z) {
     return NULL;
 }
 
-static sqlite3_stmt *function_acquire(sqlite3_context *ctx, Function *func) {
+static int function_acquire(sqlite3_context *ctx, Function *func) {
     int rc;
 
     ASSERT(func);
-    if( func->stmt ) return func->stmt;
+    if( func->stmt ) return 1;
 
     TRACE("function_acquire(%s): prepare", func->zName);
 
@@ -270,10 +161,10 @@ static sqlite3_stmt *function_acquire(sqlite3_context *ctx, Function *func) {
         TRACE("function_acquire(%s): finalize on error", func->zName);
         sqlite3_finalize(func->stmt);
         sqlite3_result_error_code(ctx, rc);
-        return NULL;
+        return 0;
     }
     func->conn->nStmt++;
-    return func->stmt;
+    return 1;
 }
 
 static void function_release(Function *func) {
@@ -282,50 +173,66 @@ static void function_release(Function *func) {
     if( !func->conn->bCache ) function_clear(func);
 }
 
-static void function_clear(Function *func) {
-    ASSERT(func);
-
-    if( func->stmt ) {
-        TRACE("function_clear(%s): finalize", func->zName);
-        sqlite3_finalize(func->stmt);
-        func->stmt = NULL;
-        func->conn->nStmt--;
-    }
+static void function_release_generic (void *data) {
+    if( data ) function_release((Function *)data);
 }
 
-static int function_register(sqlite3_context *ctx, Function *func) {
+static int function_register(
+    sqlite3_context *ctx,
+    Connection *conn,
+    const char *zName,
+    const char *zSql
+) {
+    Function *func = NULL;
     sqlite3_stmt* stmt;
-    sqlite3* db;
     int rc;
 
-    ASSERT(func);
-    ASSERT(func->conn);
-    ASSERT(func->conn->db);
+    ASSERT(conn);
+    ASSERT(conn->db);
 
-    TRACE("function_register(%s)", func->zName);
+    TRACE("function_register(%s): prepare", zName);
 
-    db = func->conn->db;
-    stmt = function_acquire(ctx, func);
-
-    if( !stmt ||
+    rc = sqlite3_prepare_v3(
+        conn->db,
+        zSql,
+        -1,
+        conn->bCache ? SQLITE_PREPARE_PERSISTENT : 0,
+        &stmt,
+        NULL
+    );
+    if( rc != SQLITE_OK ||
         !sqlite3_stmt_readonly(stmt) ||
-         sqlite3_column_count(stmt) != 1
+        sqlite3_column_count(stmt) != 1
     ) {
-        function_release(func);
-        sqlite3_result_error(ctx, "Invalid function definition", -1);
-        return 0;
+        TRACE("function_register(%s): finalize on error", zName);
+        sqlite3_finalize(stmt);
+        goto badargs;
+    }
+
+    func = function_create(conn);
+    if( !func ) {
+        sqlite3_finalize(stmt);
+        goto nomem;
+    }
+
+    func->zName = sqlite3_mprintf("%s", zName);
+    func->zSql = sqlite3_mprintf("%s", zSql);
+    if( !func->zName || !func->zSql ) {
+        sqlite3_finalize(stmt);
+        goto nomem;
     }
 
     func->nArg = sqlite3_bind_parameter_count(stmt);
+    func->stmt = stmt;
+    conn->nStmt++;
 
-    rc = sqlite3_create_function_v2(
-        func->conn->db,
+    rc = sqlite3_create_function(
+        conn->db,
         func->zName,
         func->nArg,
         SQLITE_UTF8|SQLITE_DETERMINISTIC|SQLITE_INNOCUOUS,
         func,
-        run_function, NULL, NULL,
-        function_destroy
+        run_function, NULL, NULL
     );
 
     function_release(func);
@@ -333,11 +240,94 @@ static int function_register(sqlite3_context *ctx, Function *func) {
     if( rc != SQLITE_OK ) {
         TRACE("function_register: rc=%d", rc);
         sqlite3_result_error_code(ctx, rc);
-        sqlite3_result_error(ctx, sqlite3_errmsg(db), -1);
+        sqlite3_result_error(ctx, sqlite3_errmsg(conn->db), -1);
     }
-    return rc == SQLITE_OK;
+    return (rc == SQLITE_OK);
+badargs:
+    sqlite3_result_error(ctx, "Invalid function definition", -1);
+    return 0;
+nomem:
+    sqlite3_result_error_nomem(ctx);
+    return 0;
 }
 
+/************************************************************************
+ *
+ *  Connection
+ *
+ */
+
+static void connection_destroy(void *data) {
+    Connection *conn = (Connection *)data;
+
+    ASSERT(conn);
+    TRACE("connection_destroy");
+
+    Function *func, *next;
+
+    func = conn->first;
+    while( func ) {
+        next = func->next;
+        function_destroy(func);
+        func = next;
+    }
+    conn->first = NULL;
+    sqlite3_free(conn);
+}
+
+static Connection *connection_get(sqlite3 *db) {
+    Connection* conn;
+
+    conn = (Connection *)sqlite3_get_clientdata(db, "create_function");
+    if( conn ) return conn;
+
+    TRACE("connection_get: create");
+
+    conn = sqlite3_malloc(sizeof(Connection));
+    if( !conn ) return NULL;
+    memset(conn, 0, sizeof(Connection));
+    conn->db = db;
+#ifdef CACHE_STATEMENTS
+    conn->bCache = 1;
+#else
+    conn->bCache = 0;
+#endif
+
+    sqlite3_set_clientdata(db, "create_function", conn, connection_destroy);
+
+    return conn;
+}
+
+static void connection_clear(Connection *conn) {
+    Function *p;
+
+    ASSERT(conn);
+
+    if( conn->nStmt ) {
+        TRACE("connection_clear");
+        for( p=conn->first; p; p=p->next ) {
+            function_clear(p);
+        }
+    }
+}
+
+/************************************************************************
+ *
+ *  external version of connection_clear
+ *
+ */
+
+void create_function_clear(sqlite3 *db) {
+    Connection* conn;
+
+    ASSERT(db);
+    conn = (Connection *)sqlite3_get_clientdata(db, "create_function");
+
+    if( conn ) {
+        TRACE("create_function_clear");
+        connection_clear(conn);
+    }
+}
 
 /************************************************************************
  *
@@ -345,47 +335,25 @@ static int function_register(sqlite3_context *ctx, Function *func) {
  *
  */
 
-static CallContext *context_get(sqlite3_context *ctx, Function *func) {
-    CallContext *p;
+static int context_ensure(sqlite3_context *ctx, Function *func) {
     int slot;
 
     ASSERT(func);
 
     slot = CFUN_SLOT + func->idFunc;
-    p = (CallContext *)sqlite3_get_auxdata(ctx, slot);
-    if (p) return p;
+    if( ((Function *)sqlite3_get_auxdata(ctx, slot)) == func ) return 1;
 
-    TRACE("context_get(%s)", func->zName);
+    TRACE("context_ensure(%s)", func->zName);
 
-    p = sqlite3_malloc(sizeof(CallContext));
-    if (!p) goto nomem;
-    p->func = func;
-    p->stmt = function_acquire(ctx, func);
-    if (!p->stmt) {
-        sqlite3_free(p);
-        return NULL;
-    }
+    if( !function_acquire(ctx, func) ) return 0;
 
-    sqlite3_set_auxdata(ctx, slot, p, context_destroy);
+    sqlite3_set_auxdata(ctx, slot, func, function_release_generic);
     if( !sqlite3_get_auxdata(ctx, slot) ) goto nomem;
 
-    return p;
+    return 1;
 nomem:
     sqlite3_result_error_nomem(ctx);
-    return NULL;
-}
-
-static void context_destroy(void *data) {
-    CallContext *p = (CallContext *)data;
-
-
-    ASSERT(p);
-    ASSERT(p->func);
-    TRACE("context_destroy(%s)", p->func->zName);
-
-    function_release(p->func);
-    p->stmt = NULL;
-    sqlite3_free(p);
+    return 0;
 }
 
 
@@ -400,28 +368,27 @@ static void run_function(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     ASSERT(func);
     ASSERT(func->nArg == argc);
 
-    CallContext *p = context_get(ctx, func);
-    if (!p) goto errexit;
+    if( !context_ensure(ctx, func) ) goto errexit;
 
-    ASSERT(p->stmt);
-    ASSERT(sqlite3_bind_parameter_count(p->stmt) == func->nArg);
+    ASSERT(func->stmt);
+    ASSERT(sqlite3_bind_parameter_count(func->stmt) == func->nArg);
 
-    if( sqlite3_reset(p->stmt) != SQLITE_OK ) goto errexit;
-    if( sqlite3_clear_bindings(p->stmt) != SQLITE_OK ) goto errexit;
+    if( sqlite3_reset(func->stmt) != SQLITE_OK ) goto errexit;
+    if( sqlite3_clear_bindings(func->stmt) != SQLITE_OK ) goto errexit;
 
     for (int i = 0; i < argc; i++) {
-        if( sqlite3_bind_value(p->stmt, i + 1, argv[i]) != SQLITE_OK ) goto errexit;
+        if( sqlite3_bind_value(func->stmt, i + 1, argv[i]) != SQLITE_OK ) goto errexit;
     }
 
-    int rc = sqlite3_step(p->stmt);
+    int rc = sqlite3_step(func->stmt);
     if (rc == SQLITE_ROW) {
-        sqlite3_result_value(ctx, sqlite3_column_value(p->stmt, 0));
+        sqlite3_result_value(ctx, sqlite3_column_value(func->stmt, 0));
     } else if (rc == SQLITE_DONE) {
         sqlite3_result_null(ctx);
     } else {
         goto errexit;
     }
-    sqlite3_reset(p->stmt);
+    sqlite3_reset(func->stmt);
     return;
 errexit:
     sqlite3_result_error(ctx, sqlite3_errmsg(func->conn->db), -1);
@@ -483,7 +450,7 @@ static void do_command(sqlite3_context *ctx, Connection *conn, const char *zCmd)
 
 
 static void create_function_call(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    sqlite3 *db;
+    sqlite3 *db = NULL;
     Connection *conn;
     Function *func;
     const char *zName, *zSql = NULL;
@@ -521,17 +488,7 @@ static void create_function_call(sqlite3_context *ctx, int argc, sqlite3_value *
 
     TRACE("create_function: create(%s)", zName);
 
-    func = function_create(conn);
-    if( !func ) goto nomem;
-
-    func->zName = sqlite3_mprintf("%s", zName);
-    func->zSql = sqlite3_mprintf("%s", zSql);
-    if( !func->zName || !func->zSql ) {
-        function_destroy(func);
-        goto nomem;
-    }
-
-    if( !function_register(ctx, func) != SQLITE_OK ) return;
+    if( !function_register(ctx, conn, zName, zSql) ) return;
 
     sqlite3_result_text(ctx, "OK", -1, SQLITE_STATIC);
     return;

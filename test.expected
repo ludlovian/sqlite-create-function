@@ -12,18 +12,16 @@ SELECT 21, coalesce(create_function('mul2'), 'does not exist');
 21|does not exist
 SELECT 22, create_function('mul2', 'select ?1 * 2');
 [TRACE] create_function: create(mul2)
+[TRACE] function_register(mul2): prepare
 [TRACE] function_create
-[TRACE] function_register(mul2)
-[TRACE] function_acquire(mul2): prepare
 [TRACE] function_clear(mul2): finalize
 22|OK
 SELECT 23, create_function('mul2');
 [TRACE] create_function: show(mul2)
 23|select ?1 * 2
 SELECT 24, mul2(5);
-[TRACE] context_get(mul2)
+[TRACE] context_ensure(mul2)
 [TRACE] function_acquire(mul2): prepare
-[TRACE] context_destroy(mul2)
 [TRACE] function_clear(mul2): finalize
 24|10
 
@@ -31,28 +29,24 @@ SELECT 30, 'Multiple args';
 30|Multiple args
 SELECT 31, create_function('power_sum', 'select (?1 * ?1) + (?2 * ?2)');
 [TRACE] create_function: create(power_sum)
+[TRACE] function_register(power_sum): prepare
 [TRACE] function_create
-[TRACE] function_register(power_sum)
-[TRACE] function_acquire(power_sum): prepare
 [TRACE] function_clear(power_sum): finalize
 31|OK
 SELECT 32, create_function('power_sum');
 [TRACE] create_function: show(power_sum)
 32|select (?1 * ?1) + (?2 * ?2)
 SELECT 33, power_sum(3,4);
-[TRACE] context_get(power_sum)
+[TRACE] context_ensure(power_sum)
 [TRACE] function_acquire(power_sum): prepare
-[TRACE] context_destroy(power_sum)
 [TRACE] function_clear(power_sum): finalize
 33|25
 SELECT 34, power_sum(mul2(3), mul2(4));
-[TRACE] context_get(mul2)
+[TRACE] context_ensure(mul2)
 [TRACE] function_acquire(mul2): prepare
-[TRACE] context_get(power_sum)
+[TRACE] context_ensure(power_sum)
 [TRACE] function_acquire(power_sum): prepare
-[TRACE] context_destroy(power_sum)
 [TRACE] function_clear(power_sum): finalize
-[TRACE] context_destroy(mul2)
 [TRACE] function_clear(mul2): finalize
 34|100
 
@@ -62,21 +56,17 @@ SELECT 41, create_function(NULL, 'cache');
 [TRACE] create_function: command(cache)
 41|0 statements cached
 SELECT 42, power_sum(mul2(3), mul2(4));
-[TRACE] context_get(mul2)
+[TRACE] context_ensure(mul2)
 [TRACE] function_acquire(mul2): prepare
-[TRACE] context_get(power_sum)
+[TRACE] context_ensure(power_sum)
 [TRACE] function_acquire(power_sum): prepare
-[TRACE] context_destroy(power_sum)
-[TRACE] context_destroy(mul2)
 42|100
 SELECT 43, create_function(NULL, 'cAcHe');
 [TRACE] create_function: command(cAcHe)
 43|2 statements cached
 SELECT 44, power_sum(mul2(3), mul2(4));
-[TRACE] context_get(mul2)
-[TRACE] context_get(power_sum)
-[TRACE] context_destroy(power_sum)
-[TRACE] context_destroy(mul2)
+[TRACE] context_ensure(mul2)
+[TRACE] context_ensure(power_sum)
 44|100
 
 SELECT 50, 'Clearing';
@@ -88,13 +78,11 @@ SELECT 51, create_function(NULL, 'clear');
 [TRACE] function_clear(mul2): finalize
 51|2 statements cleared
 SELECT 52, power_sum(mul2(3), mul2(4));
-[TRACE] context_get(mul2)
+[TRACE] context_ensure(mul2)
 [TRACE] function_acquire(mul2): prepare
-[TRACE] context_get(power_sum)
+[TRACE] context_ensure(power_sum)
 [TRACE] function_acquire(power_sum): prepare
-[TRACE] context_destroy(power_sum)
 [TRACE] function_clear(power_sum): finalize
-[TRACE] context_destroy(mul2)
 [TRACE] function_clear(mul2): finalize
 52|100
 SELECT 53, create_function(NULL, 'cLeAr');
@@ -107,10 +95,8 @@ SELECT 61, create_function('mul2', 'select ?1 + ?1');
 Error near line 32: Cannot redefine a function
 SELECT 62, create_function('mul3', 'triple');
 [TRACE] create_function: create(mul3)
-[TRACE] function_create
-[TRACE] function_register(mul3)
-[TRACE] function_acquire(mul3): prepare
-[TRACE] function_acquire(mul3): finalize on error
+[TRACE] function_register(mul3): prepare
+[TRACE] function_register(mul3): finalize on error
 Error near line 33: Invalid function definition
 SELECT 63, create_function(NULL, 'badcmd');
 [TRACE] create_function: command(badcmd)
@@ -121,17 +107,13 @@ SELECT 65, create_function(4, 'err');
 Error near line 36: Bad arguments to create_function
 SELECT 66, create_function('evil','create table temp.t1(x)');
 [TRACE] create_function: create(evil)
-[TRACE] function_create
-[TRACE] function_register(evil)
-[TRACE] function_acquire(evil): prepare
-[TRACE] function_clear(evil): finalize
+[TRACE] function_register(evil): prepare
+[TRACE] function_register(evil): finalize on error
 Error near line 37: Invalid function definition
 SELECT 67, create_function('twubble', 'select ?1, ?1');
 [TRACE] create_function: create(twubble)
-[TRACE] function_create
-[TRACE] function_register(twubble)
-[TRACE] function_acquire(twubble): prepare
-[TRACE] function_clear(twubble): finalize
+[TRACE] function_register(twubble): prepare
+[TRACE] function_register(twubble): finalize on error
 Error near line 38: Invalid function definition
 
 SELECT 99, create_function(NULL, 'CLEAR');
@@ -139,5 +121,5 @@ SELECT 99, create_function(NULL, 'CLEAR');
 99|0 statements cleared
 
 [TRACE] connection_destroy
-[TRACE] function_destroy(mul2)
 [TRACE] function_destroy(power_sum)
+[TRACE] function_destroy(mul2)
