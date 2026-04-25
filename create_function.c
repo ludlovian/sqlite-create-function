@@ -244,7 +244,9 @@ static int function_register(
     }
     return (rc == SQLITE_OK);
 badargs:
-    sqlite3_result_error(ctx, "Invalid function definition", -1);
+    char *errmsg = sqlite3_mprintf("Invalid function definition: %s", zName);
+    sqlite3_result_error(ctx, errmsg, -1);
+    sqlite3_free(errmsg);
     return 0;
 nomem:
     sqlite3_result_error_nomem(ctx);

@@ -97,7 +97,7 @@ SELECT 62, create_function('mul3', 'triple');
 [TRACE] create_function: create(mul3)
 [TRACE] function_register(mul3): prepare
 [TRACE] function_register(mul3): finalize on error
-Error near line 33: Invalid function definition
+Error near line 33: Invalid function definition: mul3
 SELECT 63, create_function(NULL, 'badcmd');
 [TRACE] create_function: command(badcmd)
 Error near line 34: Unknown command
@@ -109,12 +109,12 @@ SELECT 66, create_function('evil','create table temp.t1(x)');
 [TRACE] create_function: create(evil)
 [TRACE] function_register(evil): prepare
 [TRACE] function_register(evil): finalize on error
-Error near line 37: Invalid function definition
+Error near line 37: Invalid function definition: evil
 SELECT 67, create_function('twubble', 'select ?1, ?1');
 [TRACE] create_function: create(twubble)
 [TRACE] function_register(twubble): prepare
 [TRACE] function_register(twubble): finalize on error
-Error near line 38: Invalid function definition
+Error near line 38: Invalid function definition: twubble
 
 SELECT 99, create_function(NULL, 'CLEAR');
 [TRACE] create_function: command(CLEAR)
