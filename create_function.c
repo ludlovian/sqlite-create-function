@@ -235,7 +235,7 @@ static int function_register(
         run_function, NULL, NULL
     );
 
-    function_release(func);
+    function_clear(func);
 
     if( rc != SQLITE_OK ) {
         TRACE("function_register: rc=%d", rc);
